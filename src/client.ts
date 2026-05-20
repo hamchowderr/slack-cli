@@ -55,6 +55,22 @@ export interface SlackChannel {
   created?: number;
 }
 
+export interface SlackReaction {
+  name: string;
+  count: number;
+  users?: string[];
+}
+
+export interface SlackFile {
+  id: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  filetype?: string;
+  size?: number;
+  url_private?: string;
+}
+
 export interface SlackMessage {
   ts: string;
   user?: string;
@@ -62,6 +78,8 @@ export interface SlackMessage {
   thread_ts?: string;
   reply_count?: number;
   subtype?: string;
+  reactions?: SlackReaction[];
+  files?: SlackFile[];
 }
 
 let userCache: Map<string, SlackUser> | null = null;

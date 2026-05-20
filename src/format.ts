@@ -1,6 +1,6 @@
 import columnify from 'columnify';
 import chalk from 'chalk';
-import type { SlackMessage, SlackUser } from './client.js';
+import type { SlackMessage, SlackReaction, SlackUser } from './client.js';
 
 export function formatTs(ts: string): string {
   const ms = Math.floor(parseFloat(ts) * 1000);
@@ -37,8 +37,15 @@ export function renderMessages(
     });
     lines.push(`${chalk.cyan(when)}  ${chalk.bold(name)}`);
     lines.push(`  ${text}`);
+    if (m.reactions && m.reactions.length > 0) {
+      lines.push('  ' + chalk.yellow(formatReactions(m.reactions)));
+    }
     if (m.reply_count) lines.push(chalk.dim(`  ↳ ${m.reply_count} replies (ts=${m.ts})`));
     lines.push('');
   }
   return lines.join('\n');
+}
+
+export function formatReactions(reactions: SlackReaction[]): string {
+  return reactions.map((r) => `:${r.name}: ${r.count}`).join('  ');
 }
