@@ -1,6 +1,6 @@
 import columnify from 'columnify';
 import chalk from 'chalk';
-import type { SlackMessage, SlackReaction, SlackUser } from './client.js';
+import type { SlackFile, SlackMessage, SlackReaction, SlackUser } from './client.js';
 
 export function formatTs(ts: string): string {
   const ms = Math.floor(parseFloat(ts) * 1000);
@@ -40,6 +40,9 @@ export function renderMessages(
     if (m.reactions && m.reactions.length > 0) {
       lines.push('  ' + chalk.yellow(formatReactions(m.reactions)));
     }
+    if (m.files && m.files.length > 0) {
+      for (const f of m.files) lines.push('  ' + chalk.magenta(formatFile(f)));
+    }
     if (m.reply_count) lines.push(chalk.dim(`  ↳ ${m.reply_count} replies (ts=${m.ts})`));
     lines.push('');
   }
@@ -48,4 +51,19 @@ export function renderMessages(
 
 export function formatReactions(reactions: SlackReaction[]): string {
   return reactions.map((r) => `:${r.name}: ${r.count}`).join('  ');
+}
+
+export function formatFile(f: SlackFile): string {
+  const name = f.name || f.title || f.id;
+  const parts: string[] = [];
+  if (f.mimetype) parts.push(f.mimetype);
+  if (typeof f.size === 'number') parts.push(formatBytes(f.size));
+  const meta = parts.length ? ` (${parts.join(', ')})` : '';
+  return `[file: ${name}${meta}]`;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
 }
