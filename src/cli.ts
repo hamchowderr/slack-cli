@@ -58,9 +58,22 @@ program
   .command('dms')
   .description('List your direct messages')
   .option('-l, --limit <n>', 'Max DMs to fetch', '100')
-  .action(async (cmdOpts: { limit: string }) => {
+  .option(
+    '--include-connect',
+    'Resolve external Slack Connect DM partners (extra users.info calls).',
+    false,
+  )
+  .action(async (cmdOpts: { limit: string; includeConnect: boolean }) => {
     const { client, opts } = getClient();
     const users = await loadUsers(client);
+    if (cmdOpts.includeConnect) {
+      const { added, channelsScanned } = await loadConnectUsers(client, users);
+      if (!opts.json) {
+        process.stderr.write(
+          chalk.dim(`(+${added} Connect users from ${channelsScanned} shared channel(s))\n`),
+        );
+      }
+    }
     const res = await client.call<{ channels: SlackChannel[] }>('conversations.list', {
       types: 'im',
       limit: parseInt(cmdOpts.limit, 10),
