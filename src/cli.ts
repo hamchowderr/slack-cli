@@ -391,6 +391,51 @@ program
   });
 
 program
+  .command('update <target> <ts> <text...>')
+  .description('Edit one of your own messages (chat.update). Requires --yes.')
+  .option('-y, --yes', 'Skip confirmation', false)
+  .action(async (target: string, ts: string, textParts: string[], cmdOpts: { yes: boolean }) => {
+    const { client, opts } = getClient();
+    const { channelId, label } = await resolveChannel(client, target);
+    const text = textParts.join(' ');
+    if (!cmdOpts.yes) {
+      process.stderr.write(chalk.yellow(`About to edit message ${ts} in ${label} (${channelId}):\n`));
+      process.stderr.write(`  ${text}\n`);
+      process.stderr.write(chalk.dim('Pass --yes to skip this prompt and update.\n'));
+      process.stderr.write(chalk.red('Aborted (no --yes).\n'));
+      process.exit(2);
+    }
+    const res = await client.post<{ ts: string; channel: string; text?: string }>('chat.update', {
+      channel: channelId,
+      ts,
+      text,
+    });
+    if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    else process.stdout.write(chalk.green(`Updated message in ${label} (ts=${res.ts})\n`));
+  });
+
+program
+  .command('delete <target> <ts>')
+  .description('Delete one of your own messages (chat.delete). Requires --yes.')
+  .option('-y, --yes', 'Skip confirmation', false)
+  .action(async (target: string, ts: string, cmdOpts: { yes: boolean }) => {
+    const { client, opts } = getClient();
+    const { channelId, label } = await resolveChannel(client, target);
+    if (!cmdOpts.yes) {
+      process.stderr.write(chalk.yellow(`About to delete message ${ts} in ${label} (${channelId}).\n`));
+      process.stderr.write(chalk.dim('Pass --yes to skip this prompt and delete.\n'));
+      process.stderr.write(chalk.red('Aborted (no --yes).\n'));
+      process.exit(2);
+    }
+    const res = await client.post<{ ts: string; channel: string }>('chat.delete', {
+      channel: channelId,
+      ts,
+    });
+    if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    else process.stdout.write(chalk.green(`Deleted message in ${label} (ts=${ts})\n`));
+  });
+
+program
   .command('react-remove <target> <ts> <emoji>')
   .description('Remove a reaction from a message')
   .action(async (target: string, ts: string, emoji: string) => {
