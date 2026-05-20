@@ -39,6 +39,8 @@ export interface SlackUser {
   profile?: { display_name?: string; real_name?: string; email?: string };
   is_bot?: boolean;
   deleted?: boolean;
+  is_stranger?: boolean;
+  team_id?: string;
 }
 
 export interface SlackChannel {
@@ -128,6 +130,68 @@ export async function loadChannels(client: SlackClient): Promise<Map<string, Sla
   } while (cursor);
   channelCache = map;
   return map;
+}
+
+export async function loadConnectUsers(
+  client: SlackClient,
+  users: Map<string, SlackUser>,
+): Promise<{ added: number; channelsScanned: number }> {
+  // users.list does NOT include external members from Slack Connect channels.
+  // Walk every Connect-shared channel (incl. shared DMs), pull members via
+  // conversations.members, and enrich any unknown user via users.info.
+  const auth = await client.call<{ team_id: string }>('auth.test');
+  const homeTeam = auth.team_id;
+  const channels = await loadChannels(client);
+  let added = 0;
+  let channelsScanned = 0;
+  for (const ch of channels.values()) {
+    if (!ch.is_ext_shared && !ch.is_shared) continue;
+    channelsScanned++;
+    if (ch.is_im) {
+      if (ch.user && !users.has(ch.user)) {
+        const info = await safeUserInfo(client, ch.user);
+        if (info) {
+          if (info.team_id && info.team_id !== homeTeam) info.is_stranger = true;
+          users.set(info.id, info);
+          added++;
+        }
+      }
+      continue;
+    }
+    let cursor: string | undefined;
+    do {
+      const params: Record<string, string | number> = { channel: ch.id, limit: 200 };
+      if (cursor) params.cursor = cursor;
+      try {
+        const res = await client.call<{
+          members: string[];
+          response_metadata?: { next_cursor?: string };
+        }>('conversations.members', params);
+        for (const uid of res.members) {
+          if (users.has(uid)) continue;
+          const info = await safeUserInfo(client, uid);
+          if (info) {
+            if (info.team_id && info.team_id !== homeTeam) info.is_stranger = true;
+            users.set(info.id, info);
+            added++;
+          }
+        }
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } catch {
+        cursor = undefined;
+      }
+    } while (cursor);
+  }
+  return { added, channelsScanned };
+}
+
+async function safeUserInfo(client: SlackClient, userId: string): Promise<SlackUser | undefined> {
+  try {
+    const res = await client.call<{ user: SlackUser }>('users.info', { user: userId });
+    return res.user;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function getChannelInfo(client: SlackClient, channelId: string): Promise<SlackChannel | undefined> {

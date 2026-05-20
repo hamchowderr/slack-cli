@@ -5,6 +5,7 @@ import {
   channelLabel,
   createClient,
   getChannelInfo,
+  loadConnectUsers,
   loadUsers,
   resolveTarget,
   userLabel,
@@ -273,23 +274,43 @@ program
   .description('List workspace users')
   .option('--include-bots', 'Include bots', false)
   .option('--include-deleted', 'Include deleted users', false)
-  .action(async (cmdOpts: { includeBots: boolean; includeDeleted: boolean }) => {
-    const { client, opts } = getClient();
-    const users = await loadUsers(client);
-    const rows: Record<string, string>[] = [];
-    for (const u of users.values()) {
-      if (!cmdOpts.includeBots && u.is_bot) continue;
-      if (!cmdOpts.includeDeleted && u.deleted) continue;
-      rows.push({
-        id: u.id,
-        name: u.name || '',
-        real_name: u.real_name || u.profile?.real_name || '',
-        email: u.profile?.email || '',
-      });
-    }
-    if (opts.json) process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
-    else process.stdout.write(table(rows, ['id', 'name', 'real_name', 'email']) + '\n');
-  });
+  .option(
+    '--include-connect',
+    'Also include external Slack Connect users (scans shared channels via conversations.members + users.info).',
+    false,
+  )
+  .action(
+    async (cmdOpts: { includeBots: boolean; includeDeleted: boolean; includeConnect: boolean }) => {
+      const { client, opts } = getClient();
+      const users = await loadUsers(client);
+      if (cmdOpts.includeConnect) {
+        const { added, channelsScanned } = await loadConnectUsers(client, users);
+        if (!opts.json) {
+          process.stderr.write(
+            chalk.dim(`(+${added} Connect users from ${channelsScanned} shared channel(s))\n`),
+          );
+        }
+      }
+      const rows: Record<string, string>[] = [];
+      for (const u of users.values()) {
+        if (!cmdOpts.includeBots && u.is_bot) continue;
+        if (!cmdOpts.includeDeleted && u.deleted) continue;
+        rows.push({
+          id: u.id,
+          name: u.name || '',
+          real_name: u.real_name || u.profile?.real_name || '',
+          email: u.profile?.email || '',
+          team: u.team_id || '',
+          connect: u.is_stranger ? 'yes' : '',
+        });
+      }
+      if (opts.json) process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
+      else
+        process.stdout.write(
+          table(rows, ['id', 'name', 'real_name', 'email', 'team', 'connect']) + '\n',
+        );
+    },
+  );
 
 program
   .command('send <target> <message...>')
