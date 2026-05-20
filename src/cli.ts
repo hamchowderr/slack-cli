@@ -2,7 +2,9 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { getToken } from './config.js';
 import {
+  channelLabel,
   createClient,
+  getChannelInfo,
   loadUsers,
   resolveTarget,
   userLabel,
@@ -134,6 +136,11 @@ program
       if (!found) throw new Error(`Channel ${target} not found`);
       channelId = found.id;
       label = target;
+    } else if (/^[CDG][A-Z0-9]+$/.test(target)) {
+      channelId = target;
+      const users = await loadUsers(client);
+      const info = await getChannelInfo(client, channelId);
+      label = channelLabel(info, users);
     } else {
       ({ channelId, label } = await resolveTarget(client, target));
     }
@@ -144,6 +151,45 @@ program
     });
     if (!opts.json) process.stdout.write(chalk.dim(`— ${label} (${channelId}) —\n\n`));
     process.stdout.write(renderMessages(res.messages, users, { json: opts.json }) + '\n');
+  });
+
+program
+  .command('channel <id>')
+  .description('Resolve a channel ID to its info (name, type, members count). Useful for downstream tools that received a channel ID from a message.')
+  .action(async (id: string) => {
+    const { client, opts } = getClient();
+    const info = await getChannelInfo(client, id);
+    if (!info) throw new Error(`Channel ${id} not found (or not accessible to this token)`);
+    const users = await loadUsers(client);
+    const label = channelLabel(info, users);
+    const kind = info.is_im
+      ? 'im'
+      : info.is_mpim
+        ? 'mpim'
+        : info.is_private
+          ? 'private_channel'
+          : 'public_channel';
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            id: info.id,
+            name: info.name ?? null,
+            label,
+            kind,
+            is_shared: info.is_shared ?? false,
+            is_ext_shared: info.is_ext_shared ?? false,
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+    } else {
+      process.stdout.write(
+        `${chalk.bold(label)}\n  id:    ${info.id}\n  kind:  ${kind}\n` +
+          (info.is_ext_shared ? `  ${chalk.yellow('externally shared (Slack Connect)')}\n` : ''),
+      );
+    }
   });
 
 program

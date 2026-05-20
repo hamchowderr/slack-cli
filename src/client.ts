@@ -47,6 +47,10 @@ export interface SlackChannel {
   is_im?: boolean;
   is_mpim?: boolean;
   is_private?: boolean;
+  is_channel?: boolean;
+  is_group?: boolean;
+  is_shared?: boolean;
+  is_ext_shared?: boolean;
   user?: string;
   created?: number;
 }
@@ -61,6 +65,7 @@ export interface SlackMessage {
 }
 
 let userCache: Map<string, SlackUser> | null = null;
+let channelCache: Map<string, SlackChannel> | null = null;
 
 export async function loadUsers(client: SlackClient): Promise<Map<string, SlackUser>> {
   if (userCache) return userCache;
@@ -83,6 +88,50 @@ export async function loadUsers(client: SlackClient): Promise<Map<string, SlackU
 export function userLabel(u: SlackUser | undefined): string {
   if (!u) return '(unknown)';
   return u.profile?.display_name || u.real_name || u.profile?.real_name || u.name || u.id;
+}
+
+export async function loadChannels(client: SlackClient): Promise<Map<string, SlackChannel>> {
+  if (channelCache) return channelCache;
+  const map = new Map<string, SlackChannel>();
+  let cursor: string | undefined;
+  do {
+    const params: Record<string, string | number | boolean> = {
+      types: 'public_channel,private_channel,mpim,im',
+      exclude_archived: true,
+      limit: 200,
+    };
+    if (cursor) params.cursor = cursor;
+    const res = await client.call<{
+      channels: SlackChannel[];
+      response_metadata?: { next_cursor?: string };
+    }>('conversations.list', params);
+    for (const c of res.channels) map.set(c.id, c);
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  channelCache = map;
+  return map;
+}
+
+export async function getChannelInfo(client: SlackClient, channelId: string): Promise<SlackChannel | undefined> {
+  if (channelCache?.has(channelId)) return channelCache.get(channelId);
+  try {
+    const res = await client.call<{ channel: SlackChannel }>('conversations.info', { channel: channelId });
+    if (channelCache) channelCache.set(res.channel.id, res.channel);
+    return res.channel;
+  } catch {
+    return undefined;
+  }
+}
+
+export function channelLabel(c: SlackChannel | undefined, users?: Map<string, SlackUser>): string {
+  if (!c) return '(unknown)';
+  if (c.is_im) {
+    const partner = c.user ? users?.get(c.user) : undefined;
+    return `@${userLabel(partner)} DM`;
+  }
+  if (c.is_mpim) return c.name ? `[${c.name}]` : '[group DM]';
+  if (c.name) return `#${c.name}`;
+  return c.id;
 }
 
 function matchUser(u: SlackUser, needle: string): boolean {
