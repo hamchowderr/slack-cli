@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { getToken } from './config.js';
 import {
@@ -425,6 +425,64 @@ async function uploadAttachments(
   );
   return done;
 }
+
+program
+  .command('export <target>')
+  .description('Dump a channel/DM history (uses --all paging). Optionally narrow by date and write to a file.')
+  .option('-l, --limit <n>', 'Page size for conversations.history (max 999)', '200')
+  .option('--since <date>', 'ISO date or UNIX ts — only messages on/after this date.')
+  .option('--before <date>', 'ISO date or UNIX ts — only messages strictly before this date.')
+  .option('-o, --output <file>', 'Write output to file instead of stdout.')
+  .action(
+    async (
+      target: string,
+      cmdOpts: { limit: string; since?: string; before?: string; output?: string },
+    ) => {
+      const { client, opts } = getClient();
+      const resolved = await resolveChannel(client, target);
+      const channelId = resolved.channelId;
+      let label = resolved.label;
+      if (label === channelId) {
+        const users0 = await loadUsers(client);
+        const info = await getChannelInfo(client, channelId);
+        label = channelLabel(info, users0);
+      }
+      const users = await loadUsers(client);
+      const oldest = cmdOpts.since ? parseSlackDate(cmdOpts.since) : undefined;
+      const latest = cmdOpts.before ? parseSlackDate(cmdOpts.before) : undefined;
+      const pageSize = Math.min(parseInt(cmdOpts.limit, 10), 999);
+      const messages: SlackMessage[] = [];
+      let cursor: string | undefined;
+      do {
+        const params: Record<string, string | number | boolean> = {
+          channel: channelId,
+          limit: pageSize,
+          inclusive: true,
+        };
+        if (oldest !== undefined) params.oldest = oldest;
+        if (latest !== undefined) params.latest = latest;
+        if (cursor) params.cursor = cursor;
+        const res = await client.call<{
+          messages: SlackMessage[];
+          response_metadata?: { next_cursor?: string };
+        }>('conversations.history', params);
+        messages.push(...res.messages);
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      const out = opts.json
+        ? JSON.stringify(messages, null, 2)
+        : `— ${label} (${channelId}) · ${messages.length} message(s) —\n\n` +
+          renderMessages(messages, users, { json: false });
+      if (cmdOpts.output) {
+        await writeFile(cmdOpts.output, out + '\n', 'utf8');
+        process.stderr.write(
+          chalk.green(`Wrote ${messages.length} message(s) to ${cmdOpts.output}\n`),
+        );
+      } else {
+        process.stdout.write(out + '\n');
+      }
+    },
+  );
 
 program
   .command('watch <target>')
