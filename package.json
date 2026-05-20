@@ -1,0 +1,35 @@
+{
+  "name": "slack-cli",
+  "version": "0.1.0",
+  "description": "Personal Slack CLI — read DMs, channels, search, send messages from the terminal",
+  "type": "module",
+  "bin": {
+    "slk": "./dist/cli.js",
+    "slack-cli": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "author": "chowderr",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "columnify": "^1.6.0",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/columnify": "^1.5.0",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
