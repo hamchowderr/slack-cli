@@ -14,6 +14,7 @@ import {
   type SlackUser,
 } from './client.js';
 import { renderMessages, table } from './format.js';
+import { parseSlackDate } from './dates.js';
 
 const program = new Command();
 
@@ -184,14 +185,6 @@ program
       process.stdout.write(renderMessages(messages, users, { json: opts.json }) + '\n');
     },
   );
-
-function parseSlackDate(input: string): string {
-  // Slack accepts a UNIX timestamp (with optional .fractional part) as a string.
-  if (/^\d+(\.\d+)?$/.test(input)) return input;
-  const d = new Date(input);
-  if (Number.isNaN(d.getTime())) throw new Error(`Invalid date: ${input}`);
-  return (d.getTime() / 1000).toFixed(6);
-}
 
 program
   .command('channel <id>')
