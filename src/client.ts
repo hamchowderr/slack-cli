@@ -39,6 +39,8 @@ export interface SlackUser {
   profile?: { display_name?: string; real_name?: string; email?: string };
   is_bot?: boolean;
   deleted?: boolean;
+  is_stranger?: boolean;
+  team_id?: string;
 }
 
 export interface SlackChannel {
@@ -47,8 +49,28 @@ export interface SlackChannel {
   is_im?: boolean;
   is_mpim?: boolean;
   is_private?: boolean;
+  is_channel?: boolean;
+  is_group?: boolean;
+  is_shared?: boolean;
+  is_ext_shared?: boolean;
   user?: string;
   created?: number;
+}
+
+export interface SlackReaction {
+  name: string;
+  count: number;
+  users?: string[];
+}
+
+export interface SlackFile {
+  id: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  filetype?: string;
+  size?: number;
+  url_private?: string;
 }
 
 export interface SlackMessage {
@@ -58,9 +80,12 @@ export interface SlackMessage {
   thread_ts?: string;
   reply_count?: number;
   subtype?: string;
+  reactions?: SlackReaction[];
+  files?: SlackFile[];
 }
 
 let userCache: Map<string, SlackUser> | null = null;
+let channelCache: Map<string, SlackChannel> | null = null;
 
 export async function loadUsers(client: SlackClient): Promise<Map<string, SlackUser>> {
   if (userCache) return userCache;
@@ -83,6 +108,112 @@ export async function loadUsers(client: SlackClient): Promise<Map<string, SlackU
 export function userLabel(u: SlackUser | undefined): string {
   if (!u) return '(unknown)';
   return u.profile?.display_name || u.real_name || u.profile?.real_name || u.name || u.id;
+}
+
+export async function loadChannels(client: SlackClient): Promise<Map<string, SlackChannel>> {
+  if (channelCache) return channelCache;
+  const map = new Map<string, SlackChannel>();
+  let cursor: string | undefined;
+  do {
+    const params: Record<string, string | number | boolean> = {
+      types: 'public_channel,private_channel,mpim,im',
+      exclude_archived: true,
+      limit: 200,
+    };
+    if (cursor) params.cursor = cursor;
+    const res = await client.call<{
+      channels: SlackChannel[];
+      response_metadata?: { next_cursor?: string };
+    }>('conversations.list', params);
+    for (const c of res.channels) map.set(c.id, c);
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  channelCache = map;
+  return map;
+}
+
+export async function loadConnectUsers(
+  client: SlackClient,
+  users: Map<string, SlackUser>,
+): Promise<{ added: number; channelsScanned: number }> {
+  // users.list does NOT include external members from Slack Connect channels.
+  // Walk every Connect-shared channel (incl. shared DMs), pull members via
+  // conversations.members, and enrich any unknown user via users.info.
+  const auth = await client.call<{ team_id: string }>('auth.test');
+  const homeTeam = auth.team_id;
+  const channels = await loadChannels(client);
+  let added = 0;
+  let channelsScanned = 0;
+  for (const ch of channels.values()) {
+    if (!ch.is_ext_shared && !ch.is_shared) continue;
+    channelsScanned++;
+    if (ch.is_im) {
+      if (ch.user && !users.has(ch.user)) {
+        const info = await safeUserInfo(client, ch.user);
+        if (info) {
+          if (info.team_id && info.team_id !== homeTeam) info.is_stranger = true;
+          users.set(info.id, info);
+          added++;
+        }
+      }
+      continue;
+    }
+    let cursor: string | undefined;
+    do {
+      const params: Record<string, string | number> = { channel: ch.id, limit: 200 };
+      if (cursor) params.cursor = cursor;
+      try {
+        const res = await client.call<{
+          members: string[];
+          response_metadata?: { next_cursor?: string };
+        }>('conversations.members', params);
+        for (const uid of res.members) {
+          if (users.has(uid)) continue;
+          const info = await safeUserInfo(client, uid);
+          if (info) {
+            if (info.team_id && info.team_id !== homeTeam) info.is_stranger = true;
+            users.set(info.id, info);
+            added++;
+          }
+        }
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } catch {
+        cursor = undefined;
+      }
+    } while (cursor);
+  }
+  return { added, channelsScanned };
+}
+
+async function safeUserInfo(client: SlackClient, userId: string): Promise<SlackUser | undefined> {
+  try {
+    const res = await client.call<{ user: SlackUser }>('users.info', { user: userId });
+    return res.user;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getChannelInfo(client: SlackClient, channelId: string): Promise<SlackChannel | undefined> {
+  if (channelCache?.has(channelId)) return channelCache.get(channelId);
+  try {
+    const res = await client.call<{ channel: SlackChannel }>('conversations.info', { channel: channelId });
+    if (channelCache) channelCache.set(res.channel.id, res.channel);
+    return res.channel;
+  } catch {
+    return undefined;
+  }
+}
+
+export function channelLabel(c: SlackChannel | undefined, users?: Map<string, SlackUser>): string {
+  if (!c) return '(unknown)';
+  if (c.is_im) {
+    const partner = c.user ? users?.get(c.user) : undefined;
+    return `@${userLabel(partner)} DM`;
+  }
+  if (c.is_mpim) return c.name ? `[${c.name}]` : '[group DM]';
+  if (c.name) return `#${c.name}`;
+  return c.id;
 }
 
 function matchUser(u: SlackUser, needle: string): boolean {
