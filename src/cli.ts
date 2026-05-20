@@ -341,6 +341,72 @@ program
     },
   );
 
+function normalizeEmoji(input: string): string {
+  return input.replace(/^:|:$/g, '').trim();
+}
+
+async function resolveChannel(
+  client: ReturnType<typeof createClient>,
+  target: string,
+): Promise<{ channelId: string; label: string }> {
+  if (target.startsWith('#')) {
+    const list = await client.call<{ channels: SlackChannel[] }>('conversations.list', {
+      types: 'public_channel,private_channel',
+      limit: 500,
+    });
+    const found = list.channels.find((c) => c.name === target.slice(1));
+    if (!found) throw new Error(`Channel ${target} not found`);
+    return { channelId: found.id, label: target };
+  }
+  if (/^[CDG][A-Z0-9]+$/.test(target)) {
+    return { channelId: target, label: target };
+  }
+  return await resolveTarget(client, target);
+}
+
+function isMissingScope(err: unknown): boolean {
+  return err instanceof Error && /missing_scope/.test(err.message);
+}
+
+const SCOPE_HINT_REACTIONS =
+  'Add "reactions:write" to the user scopes on the Chowderr CLI Slack app and reinstall, then retry.';
+const SCOPE_HINT_FILES =
+  'Add "files:write" to the user scopes on the Chowderr CLI Slack app and reinstall, then retry.';
+
+program
+  .command('react <target> <ts> <emoji>')
+  .description('Add a reaction to a message (target: @user, #channel, or channel ID)')
+  .action(async (target: string, ts: string, emoji: string) => {
+    const { client, opts } = getClient();
+    const { channelId, label } = await resolveChannel(client, target);
+    const name = normalizeEmoji(emoji);
+    try {
+      await client.post('reactions.add', { channel: channelId, timestamp: ts, name });
+    } catch (e) {
+      if (isMissingScope(e)) process.stderr.write(chalk.yellow(SCOPE_HINT_REACTIONS + '\n'));
+      throw e;
+    }
+    if (opts.json) process.stdout.write(JSON.stringify({ ok: true, channel: channelId, ts, name }, null, 2) + '\n');
+    else process.stdout.write(chalk.green(`Reacted :${name}: on ${label} (ts=${ts})\n`));
+  });
+
+program
+  .command('react-remove <target> <ts> <emoji>')
+  .description('Remove a reaction from a message')
+  .action(async (target: string, ts: string, emoji: string) => {
+    const { client, opts } = getClient();
+    const { channelId, label } = await resolveChannel(client, target);
+    const name = normalizeEmoji(emoji);
+    try {
+      await client.post('reactions.remove', { channel: channelId, timestamp: ts, name });
+    } catch (e) {
+      if (isMissingScope(e)) process.stderr.write(chalk.yellow(SCOPE_HINT_REACTIONS + '\n'));
+      throw e;
+    }
+    if (opts.json) process.stdout.write(JSON.stringify({ ok: true, channel: channelId, ts, name }, null, 2) + '\n');
+    else process.stdout.write(chalk.green(`Removed :${name}: from ${label} (ts=${ts})\n`));
+  });
+
 program
   .command('send <target> <message...>')
   .description('Send a message to a user (@name) or channel (#name or ID)')
