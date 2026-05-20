@@ -456,40 +456,43 @@ program
   .command('send <target> <message...>')
   .description('Send a message to a user (@name) or channel (#name or ID)')
   .option('-y, --yes', 'Skip confirmation', false)
-  .action(async (target: string, messageParts: string[], cmdOpts: { yes: boolean }) => {
-    const { client, opts } = getClient();
-    const text = messageParts.join(' ');
-    let channelId: string;
-    let label: string;
-    if (target.startsWith('#')) {
-      const list = await client.call<{ channels: SlackChannel[] }>('conversations.list', {
-        types: 'public_channel,private_channel',
-        limit: 500,
-      });
-      const found = list.channels.find((c) => c.name === target.slice(1));
-      if (!found) throw new Error(`Channel ${target} not found`);
-      channelId = found.id;
-      label = target;
-    } else if (/^[CDG][A-Z0-9]+$/.test(target)) {
-      channelId = target;
-      label = target;
-    } else {
-      ({ channelId, label } = await resolveTarget(client, target));
-    }
-    if (!cmdOpts.yes) {
-      process.stderr.write(chalk.yellow(`About to send to ${label} (${channelId}):\n`));
-      process.stderr.write(`  ${text}\n`);
-      process.stderr.write(chalk.dim('Pass --yes to skip this prompt and send.\n'));
-      process.stderr.write(chalk.red('Aborted (no --yes).\n'));
-      process.exit(2);
-    }
-    const res = await client.post<{ ts: string; channel: string }>('chat.postMessage', {
-      channel: channelId,
-      text,
-    });
-    if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
-    else process.stdout.write(chalk.green(`Sent to ${label} at ${res.ts}\n`));
-  });
+  .option('--thread <ts>', 'Reply inside an existing thread (sets thread_ts).')
+  .option(
+    '--reply-broadcast',
+    'When replying in a thread, also surface the reply to the channel (requires --thread).',
+    false,
+  )
+  .action(
+    async (
+      target: string,
+      messageParts: string[],
+      cmdOpts: { yes: boolean; thread?: string; replyBroadcast: boolean },
+    ) => {
+      const { client, opts } = getClient();
+      const text = messageParts.join(' ');
+      if (cmdOpts.replyBroadcast && !cmdOpts.thread) {
+        throw new Error('--reply-broadcast requires --thread <ts>');
+      }
+      const { channelId, label } = await resolveChannel(client, target);
+      if (!cmdOpts.yes) {
+        const where = cmdOpts.thread ? `${label} (${channelId}) thread ${cmdOpts.thread}` : `${label} (${channelId})`;
+        process.stderr.write(chalk.yellow(`About to send to ${where}:\n`));
+        process.stderr.write(`  ${text}\n`);
+        process.stderr.write(chalk.dim('Pass --yes to skip this prompt and send.\n'));
+        process.stderr.write(chalk.red('Aborted (no --yes).\n'));
+        process.exit(2);
+      }
+      const body: Record<string, unknown> = { channel: channelId, text };
+      if (cmdOpts.thread) body.thread_ts = cmdOpts.thread;
+      if (cmdOpts.replyBroadcast) body.reply_broadcast = true;
+      const res = await client.post<{ ts: string; channel: string }>('chat.postMessage', body);
+      if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      else {
+        const where = cmdOpts.thread ? `${label} (thread ${cmdOpts.thread})` : label;
+        process.stdout.write(chalk.green(`Sent to ${where} at ${res.ts}\n`));
+      }
+    },
+  );
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
