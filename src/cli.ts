@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { readFile, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { getToken } from './config.js';
 import {
   channelLabel,
@@ -373,6 +375,57 @@ const SCOPE_HINT_REACTIONS =
 const SCOPE_HINT_FILES =
   'Add "files:write" to the user scopes on the Chowderr CLI Slack app and reinstall, then retry.';
 
+async function uploadAttachments(
+  client: ReturnType<typeof createClient>,
+  token: string,
+  paths: string[],
+  channelId: string,
+  initialComment?: string,
+  threadTs?: string,
+): Promise<{ files: { id: string; title?: string; permalink?: string }[] }> {
+  // New file-upload flow (files.upload is deprecated):
+  //   1. files.getUploadURLExternal -> {upload_url, file_id}
+  //   2. POST file bytes to upload_url
+  //   3. files.completeUploadExternal -> finalizes + posts to channel
+  const uploaded: { id: string; title: string }[] = [];
+  for (const p of paths) {
+    const buf = await readFile(p);
+    const st = await stat(p);
+    const fname = basename(p);
+    let step1: { upload_url: string; file_id: string };
+    try {
+      step1 = await client.call<{ upload_url: string; file_id: string }>(
+        'files.getUploadURLExternal',
+        { filename: fname, length: st.size },
+      );
+    } catch (e) {
+      if (isMissingScope(e)) process.stderr.write(chalk.yellow(SCOPE_HINT_FILES + '\n'));
+      throw e;
+    }
+    const putRes = await fetch(step1.upload_url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buf,
+    });
+    if (!putRes.ok) throw new Error(`upload PUT failed for ${p}: ${putRes.status} ${putRes.statusText}`);
+    uploaded.push({ id: step1.file_id, title: fname });
+  }
+  // Single completeUploadExternal posts all uploaded files to channel as one message
+  const body: Record<string, unknown> = {
+    files: uploaded,
+    channel_id: channelId,
+  };
+  if (initialComment) body.initial_comment = initialComment;
+  if (threadTs) body.thread_ts = threadTs;
+  // Silence: token is only used for the upload PUT above; client already authed.
+  void token;
+  const done = await client.post<{ files: { id: string; title?: string; permalink?: string }[] }>(
+    'files.completeUploadExternal',
+    body,
+  );
+  return done;
+}
+
 program
   .command('react <target> <ts> <emoji>')
   .description('Add a reaction to a message (target: @user, #channel, or channel ID)')
@@ -462,11 +515,21 @@ program
     'When replying in a thread, also surface the reply to the channel (requires --thread).',
     false,
   )
+  .option(
+    '-a, --attach <file>',
+    'Attach a file (repeat for multiple). Uses files.getUploadURLExternal + completeUploadExternal flow.',
+    (value, prev: string[]) => (prev ? [...prev, value] : [value]),
+  )
   .action(
     async (
       target: string,
       messageParts: string[],
-      cmdOpts: { yes: boolean; thread?: string; replyBroadcast: boolean },
+      cmdOpts: {
+        yes: boolean;
+        thread?: string;
+        replyBroadcast: boolean;
+        attach?: string[];
+      },
     ) => {
       const { client, opts } = getClient();
       const text = messageParts.join(' ');
@@ -474,13 +537,34 @@ program
         throw new Error('--reply-broadcast requires --thread <ts>');
       }
       const { channelId, label } = await resolveChannel(client, target);
+      const attachments = cmdOpts.attach ?? [];
       if (!cmdOpts.yes) {
         const where = cmdOpts.thread ? `${label} (${channelId}) thread ${cmdOpts.thread}` : `${label} (${channelId})`;
         process.stderr.write(chalk.yellow(`About to send to ${where}:\n`));
         process.stderr.write(`  ${text}\n`);
+        if (attachments.length > 0) {
+          process.stderr.write(chalk.yellow(`Attachments:\n`));
+          for (const a of attachments) process.stderr.write(`  ${a}\n`);
+        }
         process.stderr.write(chalk.dim('Pass --yes to skip this prompt and send.\n'));
         process.stderr.write(chalk.red('Aborted (no --yes).\n'));
         process.exit(2);
+      }
+      if (attachments.length > 0) {
+        const done = await uploadAttachments(
+          client,
+          opts.token ?? '',
+          attachments,
+          channelId,
+          text || undefined,
+          cmdOpts.thread,
+        );
+        if (opts.json) process.stdout.write(JSON.stringify(done, null, 2) + '\n');
+        else
+          process.stdout.write(
+            chalk.green(`Sent ${attachments.length} attachment(s) to ${label}\n`),
+          );
+        return;
       }
       const body: Record<string, unknown> = { channel: channelId, text };
       if (cmdOpts.thread) body.thread_ts = cmdOpts.thread;
