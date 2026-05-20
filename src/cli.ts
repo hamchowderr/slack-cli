@@ -140,10 +140,17 @@ program
   .option('--since <date>', 'Only messages on/after this date. ISO date (2026-05-18) or UNIX ts (1779238218.213609).')
   .option('--before <date>', 'Only messages strictly before this date. Same formats as --since.')
   .option('--all', 'Paginate until all matching messages are pulled (use with --since/--before).', false)
+  .option('--no-resolve', 'Pass through raw <@Uxxx> mentions instead of resolving to @display-name.', false)
   .action(
     async (
       target: string,
-      cmdOpts: { limit: string; since?: string; before?: string; all: boolean },
+      cmdOpts: {
+        limit: string;
+        since?: string;
+        before?: string;
+        all: boolean;
+        resolve: boolean;
+      },
     ) => {
       const { client, opts } = getClient();
       let channelId: string;
@@ -195,7 +202,12 @@ program
             : '';
         process.stdout.write(chalk.dim(`— ${label} (${channelId})${range} —\n\n`));
       }
-      process.stdout.write(renderMessages(messages, users, { json: opts.json }) + '\n');
+      process.stdout.write(
+        renderMessages(messages, users, {
+          json: opts.json,
+          noResolve: cmdOpts.resolve === false,
+        }) + '\n',
+      );
     },
   );
 

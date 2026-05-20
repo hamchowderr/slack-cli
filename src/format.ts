@@ -21,7 +21,7 @@ export function table(rows: Record<string, unknown>[], columns?: string[]): stri
 export function renderMessages(
   messages: SlackMessage[],
   users: Map<string, SlackUser>,
-  options: { json?: boolean } = {},
+  options: { json?: boolean; noResolve?: boolean } = {},
 ): string {
   if (options.json) return JSON.stringify(messages, null, 2);
   if (messages.length === 0) return chalk.dim('(no messages)');
@@ -31,10 +31,12 @@ export function renderMessages(
     const who = m.user ? users.get(m.user) : undefined;
     const name = who ? who.profile?.display_name || who.real_name || who.name || m.user : m.user || 'system';
     const when = formatTs(m.ts);
-    const text = (m.text || '').replace(/<@(U[A-Z0-9]+)>/g, (_, id: string) => {
-      const u = users.get(id);
-      return `@${u ? u.profile?.display_name || u.name || id : id}`;
-    });
+    const text = options.noResolve
+      ? m.text || ''
+      : (m.text || '').replace(/<@(U[A-Z0-9]+)>/g, (_, id: string) => {
+          const u = users.get(id);
+          return `@${u ? u.profile?.display_name || u.name || id : id}`;
+        });
     lines.push(`${chalk.cyan(when)}  ${chalk.bold(name)}`);
     lines.push(`  ${text}`);
     if (m.reactions && m.reactions.length > 0) {
