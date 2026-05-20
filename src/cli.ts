@@ -121,37 +121,76 @@ program
 program
   .command('read <target>')
   .description('Read messages from a DM (@user, name, channel ID, or #channel)')
-  .option('-l, --limit <n>', 'Number of messages', '30')
-  .action(async (target: string, cmdOpts: { limit: string }) => {
-    const { client, opts } = getClient();
-    let channelId: string;
-    let label: string;
-    if (target.startsWith('#')) {
-      const list = await client.call<{ channels: SlackChannel[] }>('conversations.list', {
-        types: 'public_channel,private_channel',
-        limit: 500,
-      });
-      const wanted = target.slice(1);
-      const found = list.channels.find((c) => c.name === wanted);
-      if (!found) throw new Error(`Channel ${target} not found`);
-      channelId = found.id;
-      label = target;
-    } else if (/^[CDG][A-Z0-9]+$/.test(target)) {
-      channelId = target;
+  .option('-l, --limit <n>', 'Number of messages per page (max 999)', '30')
+  .option('--since <date>', 'Only messages on/after this date. ISO date (2026-05-18) or UNIX ts (1779238218.213609).')
+  .option('--before <date>', 'Only messages strictly before this date. Same formats as --since.')
+  .option('--all', 'Paginate until all matching messages are pulled (use with --since/--before).', false)
+  .action(
+    async (
+      target: string,
+      cmdOpts: { limit: string; since?: string; before?: string; all: boolean },
+    ) => {
+      const { client, opts } = getClient();
+      let channelId: string;
+      let label: string;
+      if (target.startsWith('#')) {
+        const list = await client.call<{ channels: SlackChannel[] }>('conversations.list', {
+          types: 'public_channel,private_channel',
+          limit: 500,
+        });
+        const wanted = target.slice(1);
+        const found = list.channels.find((c) => c.name === wanted);
+        if (!found) throw new Error(`Channel ${target} not found`);
+        channelId = found.id;
+        label = target;
+      } else if (/^[CDG][A-Z0-9]+$/.test(target)) {
+        channelId = target;
+        const users = await loadUsers(client);
+        const info = await getChannelInfo(client, channelId);
+        label = channelLabel(info, users);
+      } else {
+        ({ channelId, label } = await resolveTarget(client, target));
+      }
       const users = await loadUsers(client);
-      const info = await getChannelInfo(client, channelId);
-      label = channelLabel(info, users);
-    } else {
-      ({ channelId, label } = await resolveTarget(client, target));
-    }
-    const users = await loadUsers(client);
-    const res = await client.call<{ messages: SlackMessage[] }>('conversations.history', {
-      channel: channelId,
-      limit: parseInt(cmdOpts.limit, 10),
-    });
-    if (!opts.json) process.stdout.write(chalk.dim(`— ${label} (${channelId}) —\n\n`));
-    process.stdout.write(renderMessages(res.messages, users, { json: opts.json }) + '\n');
-  });
+      const oldest = cmdOpts.since ? parseSlackDate(cmdOpts.since) : undefined;
+      const latest = cmdOpts.before ? parseSlackDate(cmdOpts.before) : undefined;
+      const pageSize = Math.min(parseInt(cmdOpts.limit, 10), 999);
+      const messages: SlackMessage[] = [];
+      let cursor: string | undefined;
+      do {
+        const params: Record<string, string | number | boolean> = {
+          channel: channelId,
+          limit: pageSize,
+          inclusive: true,
+        };
+        if (oldest !== undefined) params.oldest = oldest;
+        if (latest !== undefined) params.latest = latest;
+        if (cursor) params.cursor = cursor;
+        const res = await client.call<{
+          messages: SlackMessage[];
+          response_metadata?: { next_cursor?: string };
+        }>('conversations.history', params);
+        messages.push(...res.messages);
+        cursor = cmdOpts.all ? res.response_metadata?.next_cursor || undefined : undefined;
+      } while (cursor);
+      if (!opts.json) {
+        const range =
+          oldest !== undefined || latest !== undefined
+            ? ` [${cmdOpts.since ?? '…'} → ${cmdOpts.before ?? '…'}]`
+            : '';
+        process.stdout.write(chalk.dim(`— ${label} (${channelId})${range} —\n\n`));
+      }
+      process.stdout.write(renderMessages(messages, users, { json: opts.json }) + '\n');
+    },
+  );
+
+function parseSlackDate(input: string): string {
+  // Slack accepts a UNIX timestamp (with optional .fractional part) as a string.
+  if (/^\d+(\.\d+)?$/.test(input)) return input;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid date: ${input}`);
+  return (d.getTime() / 1000).toFixed(6);
+}
 
 program
   .command('channel <id>')
