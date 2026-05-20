@@ -1,0 +1,8 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "slack_cli",
+  "project_id": "e6118784-caee-4c83-a54c-e780a6989664",
+  "global_dolt_database": "beads_global"
+}
