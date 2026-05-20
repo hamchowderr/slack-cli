@@ -298,9 +298,11 @@ program
         }
       }
       const rows: Record<string, string>[] = [];
+      const strangerIds = new Set<string>();
       for (const u of users.values()) {
         if (!cmdOpts.includeBots && u.is_bot) continue;
         if (!cmdOpts.includeDeleted && u.deleted) continue;
+        if (u.is_stranger) strangerIds.add(u.id);
         rows.push({
           id: u.id,
           name: u.name || '',
@@ -310,11 +312,20 @@ program
           connect: u.is_stranger ? 'yes' : '',
         });
       }
-      if (opts.json) process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
-      else
-        process.stdout.write(
-          table(rows, ['id', 'name', 'real_name', 'email', 'team', 'connect']) + '\n',
-        );
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
+      } else {
+        const rendered = table(rows, ['id', 'name', 'real_name', 'email', 'team', 'connect']);
+        // Yellow-tint rows for Connect (is_stranger) users so they stand out.
+        // Each table row begins with the user ID, so match line-prefix on ID.
+        const lines = rendered.split('\n').map((line) => {
+          for (const id of strangerIds) {
+            if (line.startsWith(id)) return chalk.yellow(line);
+          }
+          return line;
+        });
+        process.stdout.write(lines.join('\n') + '\n');
+      }
     },
   );
 
