@@ -427,6 +427,80 @@ async function uploadAttachments(
 }
 
 program
+  .command('watch <target>')
+  .description('Poll a channel for new messages and stream them as they arrive')
+  .option('-i, --interval <seconds>', 'Poll interval in seconds', '10')
+  .option('-l, --limit <n>', 'Max messages per poll', '20')
+  .option('--once', 'Single poll then exit (useful for cron / scripts)', false)
+  .action(
+    async (target: string, cmdOpts: { interval: string; limit: string; once: boolean }) => {
+      const { client, opts } = getClient();
+      const resolved = await resolveChannel(client, target);
+      const channelId = resolved.channelId;
+      let label = resolved.label;
+      if (label === channelId) {
+        // resolveChannel returns the raw ID as label for channel IDs; enrich.
+        const users0 = await loadUsers(client);
+        const info = await getChannelInfo(client, channelId);
+        label = channelLabel(info, users0);
+      }
+      const users = await loadUsers(client);
+      const interval = Math.max(1, parseInt(cmdOpts.interval, 10)) * 1000;
+      const pageSize = Math.min(parseInt(cmdOpts.limit, 10), 999);
+      let lastTs: string | undefined;
+      let stopped = false;
+      const onSig = () => {
+        stopped = true;
+        if (!opts.json) process.stderr.write(chalk.dim('\n(stopping watch)\n'));
+      };
+      process.on('SIGINT', onSig);
+      process.on('SIGTERM', onSig);
+      if (!opts.json) process.stdout.write(chalk.dim(`— watching ${label} (${channelId}) —\n\n`));
+      // Prime lastTs with the most recent existing message so we don't dump
+      // the channel backlog on first poll.
+      try {
+        const prime = await client.call<{ messages: SlackMessage[] }>('conversations.history', {
+          channel: channelId,
+          limit: 1,
+        });
+        if (prime.messages[0]) lastTs = prime.messages[0].ts;
+      } catch {
+        // ignore — first real poll will catch up
+      }
+      while (!stopped) {
+        try {
+          const params: Record<string, string | number | boolean> = {
+            channel: channelId,
+            limit: pageSize,
+            inclusive: false,
+          };
+          if (lastTs) params.oldest = lastTs;
+          const res = await client.call<{ messages: SlackMessage[] }>('conversations.history', params);
+          const fresh = res.messages.filter((m) => !lastTs || parseFloat(m.ts) > parseFloat(lastTs));
+          if (fresh.length > 0) {
+            // Slack returns newest-first; renderMessages reverses already, so pass as-is.
+            process.stdout.write(renderMessages(fresh, users, { json: opts.json }) + '\n');
+            lastTs = fresh.reduce((max, m) => (parseFloat(m.ts) > parseFloat(max) ? m.ts : max), lastTs ?? '0');
+          }
+        } catch (e) {
+          if (!opts.json) {
+            const msg = e instanceof Error ? e.message : String(e);
+            process.stderr.write(chalk.red(`[watch] poll failed: ${msg}\n`));
+          }
+        }
+        if (cmdOpts.once) break;
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, interval);
+          process.on('SIGINT', () => {
+            clearTimeout(t);
+            resolve();
+          });
+        });
+      }
+    },
+  );
+
+program
   .command('react <target> <ts> <emoji>')
   .description('Add a reaction to a message (target: @user, #channel, or channel ID)')
   .action(async (target: string, ts: string, emoji: string) => {
